@@ -217,9 +217,15 @@ final class OSDWindow {
       overview.removeArrangedSubview(view)
       view.removeFromSuperview()
     }
+    // On the wallpaper, rather than the panel, the card has to show up on a light one too
+    let cardColor =
+      backdrop == .wallpaper && !Self.isDarkAppearance()
+      ? NSColor.black.withAlphaComponent(0.1) : NSColor.white.withAlphaComponent(0.18)
     for (index, icons) in spaces.enumerated() {
       overview.addArrangedSubview(
-        Self.spaceTile(icons: icons, number: index + 1, size: cardSide - 2 * Self.cardInset, selected: index == selected))
+        Self.spaceTile(
+          icons: icons, number: index + 1, size: cardSide - 2 * Self.cardInset,
+          cardColor: index == selected ? cardColor : nil))
     }
 
     label.isHidden = true
@@ -234,8 +240,8 @@ final class OSDWindow {
   }
 
   /// One space in the overview: its app icons in a grid as square as they allow, or its
-  /// number when it has none, with room around it for the card.
-  private static func spaceTile(icons: [NSImage], number: Int, size: CGFloat, selected: Bool) -> NSView {
+  /// number when it has none, with room around it for the card the selected one sits on.
+  private static func spaceTile(icons: [NSImage], number: Int, size: CGFloat, cardColor: NSColor?) -> NSView {
     let tile = NSView()
     tile.wantsLayer = true
     tile.translatesAutoresizingMaskIntoConstraints = false
@@ -244,9 +250,9 @@ final class OSDWindow {
       tile.widthAnchor.constraint(equalToConstant: side),
       tile.heightAnchor.constraint(equalToConstant: side),
     ])
-    if selected, let layer = tile.layer {
+    if let cardColor, let layer = tile.layer {
       layer.cornerRadius = cardCornerRadius
-      layer.backgroundColor = NSColor.white.withAlphaComponent(0.18).cgColor
+      layer.backgroundColor = cardColor.cgColor
     }
 
     let content: NSView
@@ -305,6 +311,8 @@ final class OSDWindow {
       let screenFrame = screen.visibleFrame
       frame.origin = NSPoint(x: screenFrame.midX - size.width / 2, y: screenFrame.midY - size.height / 2)
     }
+    // The wallpaper is all that's behind the icons, so they need no panel of their own
+    panel?.isHidden = backdrop == .wallpaper
     window.setFrame(frame, display: true)
 
     // Before the window comes forward, so the scrim stays beneath it
@@ -391,8 +399,11 @@ final class OSDWindow {
       let data = Data(base64Encoded: encoded),
       let frames = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Int]
     else { return nil }
-    let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-    return frames[isDark ? "d" : "l"]
+    return frames[isDarkAppearance() ? "d" : "l"]
+  }
+
+  private static func isDarkAppearance() -> Bool {
+    NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
   }
 
   private func hideScrim() {
@@ -452,9 +463,12 @@ final class OSDWindow {
     window.ignoresMouseEvents = true
     window.hidesOnDeactivate = false
 
-    // Use vibrancy for native macOS look
-    let visualEffect = NSVisualEffectView(
-      frame: NSRect(x: 0, y: 0, width: windowSize, height: windowSize))
+    let content = NSView(frame: NSRect(x: 0, y: 0, width: windowSize, height: windowSize))
+
+    // Use vibrancy for native macOS look. The icons and number sit beside it, not in it,
+    // so it can be hidden without them.
+    let visualEffect = NSVisualEffectView(frame: content.bounds)
+    visualEffect.autoresizingMask = [.width, .height]
     visualEffect.material = .hudWindow
     visualEffect.state = .active
     visualEffect.wantsLayer = true
@@ -482,18 +496,19 @@ final class OSDWindow {
     overview.translatesAutoresizingMaskIntoConstraints = false
     overview.isHidden = true
 
-    visualEffect.addSubview(label)
-    visualEffect.addSubview(iconStack)
-    visualEffect.addSubview(overview)
-    window.contentView = visualEffect
+    content.addSubview(visualEffect)
+    content.addSubview(label)
+    content.addSubview(iconStack)
+    content.addSubview(overview)
+    window.contentView = content
 
     NSLayoutConstraint.activate([
-      label.centerXAnchor.constraint(equalTo: visualEffect.centerXAnchor),
-      label.centerYAnchor.constraint(equalTo: visualEffect.centerYAnchor),
-      iconStack.centerXAnchor.constraint(equalTo: visualEffect.centerXAnchor),
-      iconStack.centerYAnchor.constraint(equalTo: visualEffect.centerYAnchor),
-      overview.centerXAnchor.constraint(equalTo: visualEffect.centerXAnchor),
-      overview.centerYAnchor.constraint(equalTo: visualEffect.centerYAnchor),
+      label.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+      label.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+      iconStack.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+      iconStack.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+      overview.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+      overview.centerYAnchor.constraint(equalTo: content.centerYAnchor),
     ])
 
     self.window = window
