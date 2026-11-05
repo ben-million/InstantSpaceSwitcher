@@ -13,7 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var cancellables = Set<AnyCancellable>()
   private var spaceChangeObserver: Any?
   private var appActivationObserver: Any?
-  // The space a Command-Control-click preview is showing, and the switch waiting on it
+  // The space a Command-Control-click or scroll preview is showing, and the switch waiting on it
   private var previewIndex: UInt32?
   private var previewCommit: DispatchWorkItem?
 
@@ -348,8 +348,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     performSpaceSwitchToIndex(direction == ISSDirectionLeft ? info.spaceCount - 1 : 0)
   }
 
-  /// Like performSpaceCycle, but each click only moves a preview on, and the switch
-  /// to the space it shows happens once no click has come for the preview delay.
+  /// Like performSpaceCycle, but each click or scroll step only moves a preview on, and
+  /// the switch to the space it shows happens once none has come for the preview delay.
   private func previewSpaceCycle(_ direction: ISSDirection) {
     var info = ISSSpaceInfo()
     guard iss_get_space_info(&info), info.spaceCount > 1 else {

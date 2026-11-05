@@ -16,9 +16,9 @@ final class GeneralSettingsViewController: NSViewController {
   private let swipeOverrideCheckbox = NSButton(
     checkboxWithTitle: "Override swipe gesture", target: nil, action: nil)
   private let mouseShortcutsCheckbox = NSButton(
-    checkboxWithTitle: "Switch spaces with Command-Control-click", target: nil, action: nil)
+    checkboxWithTitle: "Switch spaces with Command-Control-click or scroll", target: nil, action: nil)
   private let mouseShortcutPreviewCheckbox = NSButton(
-    checkboxWithTitle: "Show the space first, and switch after", target: nil, action: nil)
+    checkboxWithTitle: "Show the space first, and switch after a", target: nil, action: nil)
   private let mouseShortcutPreviewDelayPopup = NSPopUpButton()
   private let animationSpeedPopup = NSPopUpButton()
   private let animationSpeedLabel = NSTextField(labelWithString: "Animation Speed:")
@@ -93,7 +93,7 @@ final class GeneralSettingsViewController: NSViewController {
     previewContainer.spacing = 8
     previewContainer.addArrangedSubview(mouseShortcutPreviewCheckbox)
     previewContainer.addArrangedSubview(mouseShortcutPreviewDelayPopup)
-    previewContainer.addArrangedSubview(NSTextField(labelWithString: "without another click"))
+    previewContainer.addArrangedSubview(NSTextField(labelWithString: "pause"))
     formView.addRow(label: nil, control: previewContainer)
 
     let experimentalTitle = NSMutableAttributedString(string: "Enable Mission Control/Exposé detection\n")
