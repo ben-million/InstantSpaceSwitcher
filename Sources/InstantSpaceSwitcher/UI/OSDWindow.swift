@@ -7,12 +7,17 @@ final class OSDWindow {
   private var label: NSTextField?
   private var iconStack: NSStackView?
   private var hideTimer: Timer?
+  // Fades the screen behind the icons
+  private var scrim: NSWindow?
+  // Whether the scrim is meant to be up, which a fade-out checks before taking it down
+  private var scrimShown = false
 
   private static let numberSize: CGFloat = 140
   private static let iconSize: CGFloat = 64
   private static let iconSpacing: CGFloat = 12
   private static let iconPadding: CGFloat = 24
   private static let maxIcons = 8
+  private static let scrimOpacity: CGFloat = 0.3
 
   private init() {}
 
@@ -25,7 +30,7 @@ final class OSDWindow {
 
   func show(message: String) {
     guard shouldShow() else { return }
-    present(message: message, hidesAfterDuration: true)
+    present(message: message, fadesScreen: false, hidesAfterDuration: true)
   }
 
   /// Shows the space the way show(spaceIndex:) does, whatever the on-screen display
@@ -46,6 +51,7 @@ final class OSDWindow {
   func hide() {
     hideTimer?.invalidate()
     hideTimer = nil
+    hideScrim()
     NSAnimationContext.runAnimationGroup({ context in
       context.duration = 0.2
       window?.animator().alphaValue = 0.0
@@ -63,12 +69,15 @@ final class OSDWindow {
   }
 
   private func present(spaceIndex: UInt32, hidesAfterDuration: Bool) {
-    let showsAppIcons = UserDefaults.standard.object(forKey: "osdShowsAppIcons") as? Bool ?? true
+    let defaults = UserDefaults.standard
+    let showsAppIcons = defaults.object(forKey: "osdShowsAppIcons") as? Bool ?? true
+    // Behind an empty space's number too, so stepping through spaces doesn't flicker
+    let fadesScreen = showsAppIcons && (defaults.object(forKey: "osdFadesScreen") as? Bool ?? true)
     let icons = showsAppIcons ? Self.appIcons(onSpace: spaceIndex) : []
     if icons.isEmpty {
-      present(message: "\(spaceIndex + 1)", hidesAfterDuration: hidesAfterDuration)
+      present(message: "\(spaceIndex + 1)", fadesScreen: fadesScreen, hidesAfterDuration: hidesAfterDuration)
     } else {
-      present(icons: icons, hidesAfterDuration: hidesAfterDuration)
+      present(icons: icons, fadesScreen: fadesScreen, hidesAfterDuration: hidesAfterDuration)
     }
   }
 
@@ -91,7 +100,7 @@ final class OSDWindow {
     return icons
   }
 
-  private func present(message: String, hidesAfterDuration: Bool) {
+  private func present(message: String, fadesScreen: Bool, hidesAfterDuration: Bool) {
     if window == nil {
       createWindow()
     }
@@ -100,10 +109,12 @@ final class OSDWindow {
     label.stringValue = message
     label.isHidden = false
     iconStack.isHidden = true
-    present(window, size: NSSize(width: Self.numberSize, height: Self.numberSize), hidesAfterDuration: hidesAfterDuration)
+    present(
+      window, size: NSSize(width: Self.numberSize, height: Self.numberSize), fadesScreen: fadesScreen,
+      hidesAfterDuration: hidesAfterDuration)
   }
 
-  private func present(icons: [NSImage], hidesAfterDuration: Bool) {
+  private func present(icons: [NSImage], fadesScreen: Bool, hidesAfterDuration: Bool) {
     if window == nil {
       createWindow()
     }
@@ -129,11 +140,11 @@ final class OSDWindow {
     let count = CGFloat(icons.count)
     let width = count * Self.iconSize + (count - 1) * Self.iconSpacing + 2 * Self.iconPadding
     present(
-      window, size: NSSize(width: width, height: Self.iconSize + 2 * Self.iconPadding),
+      window, size: NSSize(width: width, height: Self.iconSize + 2 * Self.iconPadding), fadesScreen: fadesScreen,
       hidesAfterDuration: hidesAfterDuration)
   }
 
-  private func present(_ window: NSWindow, size: NSSize, hidesAfterDuration: Bool) {
+  private func present(_ window: NSWindow, size: NSSize, fadesScreen: Bool, hidesAfterDuration: Bool) {
     hideTimer?.invalidate()
     hideTimer = nil
 
@@ -148,12 +159,73 @@ final class OSDWindow {
     }
     window.setFrame(frame, display: true)
 
+    // Before the window comes forward, so the scrim stays beneath it
+    if fadesScreen, let screen {
+      showScrim(over: screen)
+    } else {
+      hideScrim()
+    }
+
     window.alphaValue = 1.0
     window.orderFrontRegardless()
 
     if hidesAfterDuration {
       scheduleHide()
     }
+  }
+
+  private func showScrim(over screen: NSScreen) {
+    let scrim = self.scrim ?? createScrim()
+    scrimShown = true
+    scrim.setFrame(screen.frame, display: false)
+    if !scrim.isVisible {
+      // Clear while it's in front of the window, until the window comes forward
+      scrim.alphaValue = 0
+      scrim.orderFrontRegardless()
+    }
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = 0.15
+      scrim.animator().alphaValue = Self.scrimOpacity
+    }
+  }
+
+  private func hideScrim() {
+    guard scrimShown, let scrim else { return }
+    scrimShown = false
+    NSAnimationContext.runAnimationGroup(
+      { context in
+        context.duration = 0.2
+        scrim.animator().alphaValue = 0
+      },
+      completionHandler: { [weak self] in
+        // Showing it again cuts the fade short, and this still runs
+        if self?.scrimShown == false {
+          scrim.orderOut(nil)
+        }
+      })
+  }
+
+  private func createScrim() -> NSWindow {
+    let scrim = NSWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: true)
+    scrim.isReleasedWhenClosed = false
+    scrim.isOpaque = false
+    scrim.backgroundColor = .clear
+    scrim.hasShadow = false
+    scrim.level = .statusBar
+    scrim.collectionBehavior = [.canJoinAllSpaces, .stationary]
+    scrim.ignoresMouseEvents = true
+    scrim.hidesOnDeactivate = false
+    // Gone as soon as it's ordered out, without shrinking away first
+    scrim.animationBehavior = .none
+
+    // A layer's colour, so a whole screen of it needs no drawing
+    let shade = NSView()
+    shade.wantsLayer = true
+    shade.layer?.backgroundColor = NSColor.black.cgColor
+    scrim.contentView = shade
+
+    self.scrim = scrim
+    return scrim
   }
 
   private func createWindow() {
