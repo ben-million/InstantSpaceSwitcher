@@ -11,10 +11,19 @@ final class OSDWindow {
   // Every space's icons, and the display they're on, while the display is up
   private var overviewCache: (display: String, spaces: [[NSImage]])?
   private var hideTimer: Timer?
-  // Fades the screen behind the icons
+  // Covers the screen behind the icons
   private var scrim: NSWindow?
   // Whether the scrim is meant to be up, which a fade-out checks before taking it down
   private var scrimShown = false
+  // The last desktop picture loaded, by its file and frame
+  private var wallpaperCache: (key: String, image: CGImage)?
+
+  /// What covers the screen behind the display.
+  private enum Backdrop {
+    case none
+    case fade  // The screen, dimmed
+    case wallpaper  // The desktop picture alone, with no windows
+  }
 
   private static let numberSize: CGFloat = 140
   private static let iconSize: CGFloat = 64
@@ -25,12 +34,11 @@ final class OSDWindow {
   private static let scrimOpacity: CGFloat = 0.3
 
   // The overview of every space
-  private static let tileSize: CGFloat = 96
-  private static let ringInset: CGFloat = 10
-  private static let ringWidth: CGFloat = 3
-  private static let ringCornerRadius: CGFloat = 16
-  private static let ringSpacing: CGFloat = 4
-  private static let overviewPadding: CGFloat = 12
+  private static let tileSize: CGFloat = 192
+  private static let cardInset: CGFloat = 16
+  private static let cardCornerRadius: CGFloat = 32
+  private static let cardSpacing: CGFloat = 4
+  private static let overviewPadding: CGFloat = 14
 
   private init() {}
 
@@ -43,7 +51,7 @@ final class OSDWindow {
 
   func show(message: String) {
     guard shouldShow() else { return }
-    present(message: message, fadesScreen: false, hidesAfterDuration: true)
+    present(message: message, backdrop: .none, hidesAfterDuration: true)
   }
 
   /// Shows the space the way show(spaceIndex:) does, whatever the on-screen display
@@ -86,19 +94,27 @@ final class OSDWindow {
     let defaults = UserDefaults.standard
     let showsAppIcons = defaults.object(forKey: "osdShowsAppIcons") as? Bool ?? true
     // Behind an empty space's number too, so stepping through spaces doesn't flicker
-    let fadesScreen = showsAppIcons && (defaults.object(forKey: "osdFadesScreen") as? Bool ?? true)
+    let backdrop = showsAppIcons ? Self.iconBackdrop() : .none
     if showsAppIcons && defaults.bool(forKey: "osdShowsAllSpaces"), let spaces = allSpacesIcons(),
       Int(spaceIndex) < spaces.count
     {
-      present(spaces: spaces, selected: Int(spaceIndex), fadesScreen: fadesScreen, hidesAfterDuration: hidesAfterDuration)
+      present(spaces: spaces, selected: Int(spaceIndex), backdrop: backdrop, hidesAfterDuration: hidesAfterDuration)
       return
     }
     let icons = showsAppIcons ? Self.appIcons(onSpace: spaceIndex) : []
     if icons.isEmpty {
-      present(message: "\(spaceIndex + 1)", fadesScreen: fadesScreen, hidesAfterDuration: hidesAfterDuration)
+      present(message: "\(spaceIndex + 1)", backdrop: backdrop, hidesAfterDuration: hidesAfterDuration)
     } else {
-      present(icons: icons, fadesScreen: fadesScreen, hidesAfterDuration: hidesAfterDuration)
+      present(icons: icons, backdrop: backdrop, hidesAfterDuration: hidesAfterDuration)
     }
+  }
+
+  private static func iconBackdrop() -> Backdrop {
+    let defaults = UserDefaults.standard
+    if defaults.bool(forKey: "osdShowsOnlyWallpaper") {
+      return .wallpaper
+    }
+    return defaults.object(forKey: "osdFadesScreen") as? Bool ?? true ? .fade : .none
   }
 
   /// Every space's app icons on the display under the cursor. They're kept while the
@@ -134,7 +150,7 @@ final class OSDWindow {
     return icons
   }
 
-  private func present(message: String, fadesScreen: Bool, hidesAfterDuration: Bool) {
+  private func present(message: String, backdrop: Backdrop, hidesAfterDuration: Bool) {
     if window == nil {
       createWindow()
     }
@@ -146,11 +162,11 @@ final class OSDWindow {
     overview.isHidden = true
     panel?.layer?.cornerRadius = Self.cornerRadius
     present(
-      window, size: NSSize(width: Self.numberSize, height: Self.numberSize), fadesScreen: fadesScreen,
+      window, size: NSSize(width: Self.numberSize, height: Self.numberSize), backdrop: backdrop,
       hidesAfterDuration: hidesAfterDuration)
   }
 
-  private func present(icons: [NSImage], fadesScreen: Bool, hidesAfterDuration: Bool) {
+  private func present(icons: [NSImage], backdrop: Backdrop, hidesAfterDuration: Bool) {
     if window == nil {
       createWindow()
     }
@@ -178,13 +194,13 @@ final class OSDWindow {
     let count = CGFloat(icons.count)
     let width = count * Self.iconSize + (count - 1) * Self.iconSpacing + 2 * Self.iconPadding
     present(
-      window, size: NSSize(width: width, height: Self.iconSize + 2 * Self.iconPadding), fadesScreen: fadesScreen,
+      window, size: NSSize(width: width, height: Self.iconSize + 2 * Self.iconPadding), backdrop: backdrop,
       hidesAfterDuration: hidesAfterDuration)
   }
 
   /// Lays every space out as a tile of its app icons, the way Command-Tab lays out
-  /// apps, and rings the selected one.
-  private func present(spaces: [[NSImage]], selected: Int, fadesScreen: Bool, hidesAfterDuration: Bool) {
+  /// apps, and sets the selected one on a card.
+  private func present(spaces: [[NSImage]], selected: Int, backdrop: Backdrop, hidesAfterDuration: Bool) {
     if window == nil {
       createWindow()
     }
@@ -193,9 +209,9 @@ final class OSDWindow {
     // Smaller tiles when there are too many spaces to fit across the screen
     let count = CGFloat(spaces.count)
     let screenWidth = Self.cursorScreen()?.visibleFrame.width ?? 1440
-    let ringSide = min(
-      Self.tileSize + 2 * Self.ringInset,
-      (screenWidth * 0.9 - 2 * Self.overviewPadding - (count - 1) * Self.ringSpacing) / count)
+    let cardSide = min(
+      Self.tileSize + 2 * Self.cardInset,
+      (screenWidth * 0.9 - 2 * Self.overviewPadding - (count - 1) * Self.cardSpacing) / count)
 
     for view in overview.arrangedSubviews {
       overview.removeArrangedSubview(view)
@@ -203,36 +219,34 @@ final class OSDWindow {
     }
     for (index, icons) in spaces.enumerated() {
       overview.addArrangedSubview(
-        Self.spaceTile(icons: icons, number: index + 1, size: ringSide - 2 * Self.ringInset, ringed: index == selected))
+        Self.spaceTile(icons: icons, number: index + 1, size: cardSide - 2 * Self.cardInset, selected: index == selected))
     }
 
     label.isHidden = true
     iconStack.isHidden = true
     overview.isHidden = false
-    // Corners that follow the ring's, round it
-    panel?.layer?.cornerRadius = Self.ringCornerRadius + Self.overviewPadding
-    let width = count * ringSide + (count - 1) * Self.ringSpacing + 2 * Self.overviewPadding
+    // Corners that follow the card's, round it
+    panel?.layer?.cornerRadius = Self.cardCornerRadius + Self.overviewPadding
+    let width = count * cardSide + (count - 1) * Self.cardSpacing + 2 * Self.overviewPadding
     present(
-      window, size: NSSize(width: width, height: ringSide + 2 * Self.overviewPadding), fadesScreen: fadesScreen,
+      window, size: NSSize(width: width, height: cardSide + 2 * Self.overviewPadding), backdrop: backdrop,
       hidesAfterDuration: hidesAfterDuration)
   }
 
   /// One space in the overview: its app icons in a grid as square as they allow, or its
-  /// number when it has none, with room around it for the ring.
-  private static func spaceTile(icons: [NSImage], number: Int, size: CGFloat, ringed: Bool) -> NSView {
+  /// number when it has none, with room around it for the card.
+  private static func spaceTile(icons: [NSImage], number: Int, size: CGFloat, selected: Bool) -> NSView {
     let tile = NSView()
     tile.wantsLayer = true
     tile.translatesAutoresizingMaskIntoConstraints = false
-    let side = size + 2 * ringInset
+    let side = size + 2 * cardInset
     NSLayoutConstraint.activate([
       tile.widthAnchor.constraint(equalToConstant: side),
       tile.heightAnchor.constraint(equalToConstant: side),
     ])
-    if ringed, let layer = tile.layer {
-      layer.cornerRadius = ringCornerRadius
-      layer.borderWidth = ringWidth
-      layer.borderColor = NSColor.white.cgColor
-      layer.backgroundColor = NSColor.white.withAlphaComponent(0.1).cgColor
+    if selected, let layer = tile.layer {
+      layer.cornerRadius = cardCornerRadius
+      layer.backgroundColor = NSColor.white.withAlphaComponent(0.18).cgColor
     }
 
     let content: NSView
@@ -280,7 +294,7 @@ final class OSDWindow {
     return NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) }) ?? NSScreen.main
   }
 
-  private func present(_ window: NSWindow, size: NSSize, fadesScreen: Bool, hidesAfterDuration: Bool) {
+  private func present(_ window: NSWindow, size: NSSize, backdrop: Backdrop, hidesAfterDuration: Bool) {
     hideTimer?.invalidate()
     hideTimer = nil
 
@@ -294,8 +308,8 @@ final class OSDWindow {
     window.setFrame(frame, display: true)
 
     // Before the window comes forward, so the scrim stays beneath it
-    if fadesScreen, let screen {
-      showScrim(over: screen)
+    if backdrop != .none, let screen {
+      showScrim(over: screen, backdrop: backdrop)
     } else {
       hideScrim()
     }
@@ -308,10 +322,25 @@ final class OSDWindow {
     }
   }
 
-  private func showScrim(over screen: NSScreen) {
+  private func showScrim(over screen: NSScreen, backdrop: Backdrop) {
     let scrim = self.scrim ?? createScrim()
     scrimShown = true
     scrim.setFrame(screen.frame, display: false)
+    if let layer = scrim.contentView?.layer {
+      CATransaction.begin()
+      CATransaction.setDisableActions(true)
+      if backdrop == .wallpaper {
+        let wallpaper = wallpaper(for: screen)
+        layer.contents = wallpaper.image
+        layer.contentsGravity = wallpaper.gravity
+        layer.contentsScale = screen.backingScaleFactor
+        layer.backgroundColor = wallpaper.fillColor.cgColor
+      } else {
+        layer.contents = nil
+        layer.backgroundColor = NSColor.black.cgColor
+      }
+      CATransaction.commit()
+    }
     if !scrim.isVisible {
       // Clear while it's in front of the window, until the window comes forward
       scrim.alphaValue = 0
@@ -319,8 +348,51 @@ final class OSDWindow {
     }
     NSAnimationContext.runAnimationGroup { context in
       context.duration = 0.15
-      scrim.animator().alphaValue = Self.scrimOpacity
+      scrim.animator().alphaValue = backdrop == .wallpaper ? 1 : Self.scrimOpacity
     }
+  }
+
+  /// The screen's desktop picture as macOS shows it: the light or dark frame of one that
+  /// follows the appearance, placed the way the screen's settings say.
+  private func wallpaper(for screen: NSScreen) -> (image: CGImage?, gravity: CALayerContentsGravity, fillColor: NSColor) {
+    let workspace = NSWorkspace.shared
+    let options = workspace.desktopImageOptions(for: screen) ?? [:]
+    let fillColor = options[.fillColor] as? NSColor ?? .black
+    let scaling = (options[.imageScaling] as? NSNumber).flatMap { NSImageScaling(rawValue: $0.uintValue) }
+    let allowsClipping = (options[.allowClipping] as? NSNumber)?.boolValue ?? true
+    let gravity: CALayerContentsGravity
+    switch scaling {
+    case .scaleAxesIndependently: gravity = .resize
+    case .scaleNone: gravity = .center
+    default: gravity = allowsClipping ? .resizeAspectFill : .resizeAspect
+    }
+
+    guard let url = workspace.desktopImageURL(for: screen),
+      let source = CGImageSourceCreateWithURL(url as CFURL, nil)
+    else { return (nil, gravity, fillColor) }
+    let index = Self.appearanceFrame(of: source) ?? CGImageSourceGetPrimaryImageIndex(source)
+    let key = "\(url.path)#\(index)"
+    if let wallpaperCache, wallpaperCache.key == key {
+      return (wallpaperCache.image, gravity, fillColor)
+    }
+    let image = CGImageSourceCreateImageAtIndex(source, index, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
+    if let image {
+      wallpaperCache = (key, image)
+    }
+    return (image, gravity, fillColor)
+  }
+
+  /// For a desktop picture with a frame for light and one for dark, the one the
+  /// appearance is using, from the index in its apple_desktop:apr metadata.
+  private static func appearanceFrame(of source: CGImageSource) -> Int? {
+    let primary = CGImageSourceGetPrimaryImageIndex(source)
+    guard let metadata = CGImageSourceCopyMetadataAtIndex(source, primary, nil),
+      let encoded = CGImageMetadataCopyStringValueWithPath(metadata, nil, "apple_desktop:apr" as CFString) as String?,
+      let data = Data(base64Encoded: encoded),
+      let frames = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Int]
+    else { return nil }
+    let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    return frames[isDark ? "d" : "l"]
   }
 
   private func hideScrim() {
@@ -352,10 +424,10 @@ final class OSDWindow {
     // Gone as soon as it's ordered out, without shrinking away first
     scrim.animationBehavior = .none
 
-    // A layer's colour, so a whole screen of it needs no drawing
+    // A layer this window owns, whose colour or picture a whole screen of needs no drawing
     let shade = NSView()
+    shade.layer = CALayer()
     shade.wantsLayer = true
-    shade.layer?.backgroundColor = NSColor.black.cgColor
     scrim.contentView = shade
 
     self.scrim = scrim
@@ -406,7 +478,7 @@ final class OSDWindow {
 
     let overview = NSStackView()
     overview.orientation = .horizontal
-    overview.spacing = Self.ringSpacing
+    overview.spacing = Self.cardSpacing
     overview.translatesAutoresizingMaskIntoConstraints = false
     overview.isHidden = true
 

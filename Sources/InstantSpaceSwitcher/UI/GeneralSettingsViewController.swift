@@ -14,9 +14,11 @@ final class GeneralSettingsViewController: NSViewController {
   private let osdAppIconsCheckbox = NSButton(
     checkboxWithTitle: "Show the space's app icons instead of its number", target: nil, action: nil)
   private let osdAllSpacesCheckbox = NSButton(
-    checkboxWithTitle: "Show all spaces, with a ring around the selected one", target: nil, action: nil)
+    checkboxWithTitle: "Show all spaces, with the selected one highlighted", target: nil, action: nil)
   private let osdFadesScreenCheckbox = NSButton(
     checkboxWithTitle: "Fade the screen behind the icons", target: nil, action: nil)
+  private let osdWallpaperCheckbox = NSButton(
+    checkboxWithTitle: "Show only the wallpaper behind the icons", target: nil, action: nil)
   private let swipeOverrideCheckbox = NSButton(
     checkboxWithTitle: "Override swipe gesture", target: nil, action: nil)
   private let mouseShortcutsCheckbox = NSButton(
@@ -69,6 +71,8 @@ final class GeneralSettingsViewController: NSViewController {
     osdAllSpacesCheckbox.action = #selector(osdAllSpacesChanged)
     osdFadesScreenCheckbox.target = self
     osdFadesScreenCheckbox.action = #selector(osdFadesScreenChanged)
+    osdWallpaperCheckbox.target = self
+    osdWallpaperCheckbox.action = #selector(osdWallpaperChanged)
     swipeOverrideCheckbox.target = self
     swipeOverrideCheckbox.action = #selector(swipeOverrideChanged)
     mouseShortcutsCheckbox.target = self
@@ -139,6 +143,7 @@ final class GeneralSettingsViewController: NSViewController {
     formView.addRow(label: nil, control: osdAppIconsCheckbox)
     formView.addRow(label: nil, control: osdAllSpacesCheckbox)
     formView.addRow(label: nil, control: osdFadesScreenCheckbox)
+    formView.addRow(label: nil, control: osdWallpaperCheckbox)
   }
 
   private func loadSettings() {
@@ -158,12 +163,11 @@ final class GeneralSettingsViewController: NSViewController {
     showOSDInMissionControlCheckbox.isEnabled = showOSD && overlayDetectionEnabled
     showOSDInMissionControlCheckbox.state = defaults.bool(forKey: "showOSDInMissionControl") ? .on : .off
     osdAppIconsCheckbox.isEnabled = showOSD
-    let showsAppIcons = defaults.object(forKey: "osdShowsAppIcons") as? Bool ?? true
-    osdAppIconsCheckbox.state = showsAppIcons ? .on : .off
-    osdAllSpacesCheckbox.isEnabled = showOSD && showsAppIcons
+    osdAppIconsCheckbox.state = (defaults.object(forKey: "osdShowsAppIcons") as? Bool ?? true) ? .on : .off
     osdAllSpacesCheckbox.state = defaults.bool(forKey: "osdShowsAllSpaces") ? .on : .off
-    osdFadesScreenCheckbox.isEnabled = showOSD && showsAppIcons
     osdFadesScreenCheckbox.state = (defaults.object(forKey: "osdFadesScreen") as? Bool ?? true) ? .on : .off
+    osdWallpaperCheckbox.state = defaults.bool(forKey: "osdShowsOnlyWallpaper") ? .on : .off
+    updateAppIconOptions()
 
     hideMenuBarIconCheckbox.state = defaults.bool(forKey: "hideMenuBarIcon") ? .on : .off
     swipeOverrideCheckbox.state = defaults.bool(forKey: "swipeOverride") ? .on : .off
@@ -195,8 +199,7 @@ final class GeneralSettingsViewController: NSViewController {
     defaults.set(isEnabled, forKey: "showOSD")
     osdDurationPopup.isEnabled = isEnabled
     osdAppIconsCheckbox.isEnabled = isEnabled
-    osdAllSpacesCheckbox.isEnabled = isEnabled && osdAppIconsCheckbox.state == .on
-    osdFadesScreenCheckbox.isEnabled = isEnabled && osdAppIconsCheckbox.state == .on
+    updateAppIconOptions()
     let overlayDetectionEnabled = overlayDetectionCheckbox.state == .on
     showOSDInMissionControlCheckbox.isEnabled = isEnabled && overlayDetectionEnabled
   }
@@ -211,8 +214,7 @@ final class GeneralSettingsViewController: NSViewController {
 
   @objc private func osdAppIconsChanged(_ sender: NSButton) {
     defaults.set(sender.state == .on, forKey: "osdShowsAppIcons")
-    osdAllSpacesCheckbox.isEnabled = sender.state == .on
-    osdFadesScreenCheckbox.isEnabled = sender.state == .on
+    updateAppIconOptions()
   }
 
   @objc private func osdAllSpacesChanged(_ sender: NSButton) {
@@ -221,6 +223,20 @@ final class GeneralSettingsViewController: NSViewController {
 
   @objc private func osdFadesScreenChanged(_ sender: NSButton) {
     defaults.set(sender.state == .on, forKey: "osdFadesScreen")
+  }
+
+  @objc private func osdWallpaperChanged(_ sender: NSButton) {
+    defaults.set(sender.state == .on, forKey: "osdShowsOnlyWallpaper")
+    updateAppIconOptions()
+  }
+
+  /// The app icon options only matter while the display shows app icons, and the fade
+  /// only while the windows behind them show.
+  private func updateAppIconOptions() {
+    let showsAppIcons = showOSDCheckbox.state == .on && osdAppIconsCheckbox.state == .on
+    osdAllSpacesCheckbox.isEnabled = showsAppIcons
+    osdWallpaperCheckbox.isEnabled = showsAppIcons
+    osdFadesScreenCheckbox.isEnabled = showsAppIcons && osdWallpaperCheckbox.state == .off
   }
 
   @objc private func showOSDInMissionControlChanged(_ sender: NSButton) {
