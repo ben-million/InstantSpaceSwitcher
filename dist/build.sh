@@ -94,9 +94,13 @@ echo "Injecting git SHA: ${GIT_SHA}"
 /usr/libexec/PlistBuddy -c "Add :GitCommitHash string ${GIT_SHA}" "${APP_BUNDLE}/Contents/Info.plist" 2>/dev/null || \
 /usr/libexec/PlistBuddy -c "Set :GitCommitHash ${GIT_SHA}" "${APP_BUNDLE}/Contents/Info.plist"
 
+# Ad-hoc by default. Each ad-hoc build is a different app to macOS, so its
+# Accessibility approval is lost on every rebuild; signing with a stable identity
+# (SIGN_IDENTITY="Apple Development: …") keeps it.
+SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 echo ""
-echo "Signing (ad-hoc)..."
-codesign --force --deep --sign - "${APP_BUNDLE}"
+echo "Signing (${SIGN_IDENTITY/#-/ad-hoc})..."
+codesign --force --deep --sign "${SIGN_IDENTITY}" "${APP_BUNDLE}"
 
 echo ""
 echo "App bundled at $(pwd)/${APP_BUNDLE} (${BUILD_CONFIG})"
