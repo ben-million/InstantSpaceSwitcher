@@ -50,7 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     iss_set_switch_callback { newSpaceIndex in
       DispatchQueue.main.async {
-        OSDWindow.shared.show(message: "\(newSpaceIndex + 1)")
+        OSDWindow.shared.show(spaceIndex: newSpaceIndex)
       }
     }
 

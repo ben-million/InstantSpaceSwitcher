@@ -128,8 +128,11 @@ static void set_prediction(const char *displayID, unsigned int index) {
 static bool extract_space_info_from_display(CFDictionaryRef displayDict,
                                             CGSSpaceID activeSpace,
                                             bool hasActiveSpace,
-                                            ISSSpaceInfo *outInfo);
-static bool load_space_info_for_display(ISSSpaceInfo *info, bool useCursorDisplay);
+                                            ISSSpaceInfo *outInfo,
+                                            CGSSpaceID *outSpaceIDs,
+                                            unsigned int maxSpaceIDs);
+static bool load_space_info_for_display(ISSSpaceInfo *info, bool useCursorDisplay,
+                                        CGSSpaceID *outSpaceIDs, unsigned int maxSpaceIDs);
 static bool iss_perform_switch_gesture(ISSDirection direction, double velocity);
 static bool iss_switch_with_info(const ISSSpaceInfo *info, ISSDirection direction);
 static bool iss_should_block_switch(const ISSSpaceInfo *info, ISSDirection direction);
@@ -276,10 +279,13 @@ static bool cgs_symbols_available(void) {
            (&CGSCopyManagedDisplaySpaces != NULL);
 }
 
+// outSpaceIDs, when given, receives each counted space's ID in index order
 static bool extract_space_info_from_display(CFDictionaryRef displayDict,
                                             CGSSpaceID activeSpace,
                                             bool hasActiveSpace,
-                                            ISSSpaceInfo *outInfo) {
+                                            ISSSpaceInfo *outInfo,
+                                            CGSSpaceID *outSpaceIDs,
+                                            unsigned int maxSpaceIDs) {
     if (!displayDict || !outInfo) {
         return false;
     }
@@ -335,6 +341,9 @@ static bool extract_space_info_from_display(CFDictionaryRef displayDict,
                 activeIndex = totalSpaces;
                 foundActive = true;
             }
+            if (outSpaceIDs && totalSpaces < maxSpaceIDs) {
+                outSpaceIDs[totalSpaces] = candidate;
+            }
             totalSpaces++;
         }
     }
@@ -348,7 +357,8 @@ static bool extract_space_info_from_display(CFDictionaryRef displayDict,
     return true;
 }
 
-static bool load_space_info_for_display(ISSSpaceInfo *info, bool useCursorDisplay) {
+static bool load_space_info_for_display(ISSSpaceInfo *info, bool useCursorDisplay,
+                                        CGSSpaceID *outSpaceIDs, unsigned int maxSpaceIDs) {
     if (!cgs_symbols_available()) {
         fprintf(stderr, "ISS: required CGS symbols missing\n");
         return false;
@@ -443,7 +453,8 @@ static bool load_space_info_for_display(ISSSpaceInfo *info, bool useCursorDispla
 
     bool success = false;
     if (targetDisplay) {
-        success = extract_space_info_from_display(targetDisplay, activeSpace, hasActiveSpace, info);
+        success = extract_space_info_from_display(targetDisplay, activeSpace, hasActiveSpace, info,
+                                                  outSpaceIDs, maxSpaceIDs);
     }
 
     if (activeDisplayIdentifier) {
@@ -753,7 +764,7 @@ bool iss_get_space_info(ISSSpaceInfo *info) {
     }
 
     memset(info, 0, sizeof(*info));
-    return load_space_info_for_display(info, true);
+    return load_space_info_for_display(info, true, NULL, 0);
 }
 
 bool iss_get_menubar_space_info(ISSSpaceInfo *info) {
@@ -762,7 +773,7 @@ bool iss_get_menubar_space_info(ISSSpaceInfo *info) {
     }
 
     memset(info, 0, sizeof(*info));
-    return load_space_info_for_display(info, false);
+    return load_space_info_for_display(info, false, NULL, 0);
 }
 
 static bool iss_switch_with_info(const ISSSpaceInfo *info, ISSDirection direction) {
@@ -854,4 +865,117 @@ void iss_reset_predictions(void) {
 
 void iss_set_switch_callback(ISSSwitchCallback callback) {
     switchCallback = callback;
+}
+
+// SkyLight's own name; looked up at run time so a macOS without it only loses the icons
+typedef CFArrayRef (*SLSCopyWindowsWithOptionsAndTagsFn)(CGSConnectionID connection, uint32_t owner,
+                                                         CFArrayRef spaces, uint32_t options,
+                                                         uint64_t *setTags, uint64_t *clearTags);
+
+// Room for every space a display can have
+#define ISS_MAX_SPACES 64
+
+// Anything thinner on either side is a helper window or a sliver, not the app's own
+static const double kMinAppWindowSide = 40.0;
+
+unsigned int iss_get_space_app_pids(unsigned int spaceIndex, pid_t *outPids, unsigned int maxPids) {
+    if (!outPids || maxPids == 0) {
+        return 0;
+    }
+
+    static SLSCopyWindowsWithOptionsAndTagsFn copyWindows = NULL;
+    static bool lookedUp = false;
+    if (!lookedUp) {
+        lookedUp = true;
+        copyWindows = (SLSCopyWindowsWithOptionsAndTagsFn)dlsym(RTLD_DEFAULT, "SLSCopyWindowsWithOptionsAndTags");
+    }
+    if (!copyWindows) {
+        return 0;
+    }
+
+    ISSSpaceInfo info;
+    CGSSpaceID spaceIDs[ISS_MAX_SPACES];
+    memset(&info, 0, sizeof(info));
+    if (!load_space_info_for_display(&info, true, spaceIDs, ISS_MAX_SPACES) ||
+        spaceIndex >= info.spaceCount || spaceIndex >= ISS_MAX_SPACES) {
+        return 0;
+    }
+
+    CGSSpaceID spaceID = spaceIDs[spaceIndex];
+    CFNumberRef spaceNumber = CFNumberCreate(NULL, kCFNumberSInt64Type, &spaceID);
+    CFArrayRef spaces = CFArrayCreate(NULL, (const void **)&spaceNumber, 1, &kCFTypeArrayCallBacks);
+    CFRelease(spaceNumber);
+
+    // Every owner's windows on the space; options 0x2 leaves minimized ones out
+    uint64_t setTags = 0;
+    uint64_t clearTags = 0;
+    CFArrayRef windowIDs = copyWindows(CGSMainConnectionID(), 0, spaces, 0x2, &setTags, &clearTags);
+    CFRelease(spaces);
+    if (!windowIDs) {
+        return 0;
+    }
+
+    CFMutableSetRef onSpace = CFSetCreateMutable(NULL, 0, NULL);
+    for (CFIndex i = 0; i < CFArrayGetCount(windowIDs); i++) {
+        CFNumberRef number = (CFNumberRef)CFArrayGetValueAtIndex(windowIDs, i);
+        uint32_t windowID = 0;
+        if (number && CFNumberGetValue(number, kCFNumberSInt32Type, &windowID)) {
+            CFSetAddValue(onSpace, (const void *)(uintptr_t)windowID);
+        }
+    }
+    CFRelease(windowIDs);
+
+    // The session's windows front to back, for owners, layers and sizes
+    CFArrayRef windowList = CGWindowListCopyWindowInfo(kCGWindowListOptionAll, kCGNullWindowID);
+    if (!windowList) {
+        CFRelease(onSpace);
+        return 0;
+    }
+
+    unsigned int count = 0;
+    for (CFIndex i = 0; i < CFArrayGetCount(windowList) && count < maxPids; i++) {
+        CFDictionaryRef window = (CFDictionaryRef)CFArrayGetValueAtIndex(windowList, i);
+
+        uint32_t windowID = 0;
+        CFNumberRef number = (CFNumberRef)CFDictionaryGetValue(window, kCGWindowNumber);
+        if (!number || !CFNumberGetValue(number, kCFNumberSInt32Type, &windowID) ||
+            !CFSetContainsValue(onSpace, (const void *)(uintptr_t)windowID)) {
+            continue;
+        }
+
+        // Layer 0 is where apps' ordinary windows live
+        int layer = -1;
+        CFNumberRef layerNumber = (CFNumberRef)CFDictionaryGetValue(window, kCGWindowLayer);
+        if (!layerNumber || !CFNumberGetValue(layerNumber, kCFNumberIntType, &layer) || layer != 0) {
+            continue;
+        }
+
+        CGRect bounds = CGRectZero;
+        CFDictionaryRef boundsDict = (CFDictionaryRef)CFDictionaryGetValue(window, kCGWindowBounds);
+        if (!boundsDict || !CGRectMakeWithDictionaryRepresentation(boundsDict, &bounds) ||
+            bounds.size.width < kMinAppWindowSide || bounds.size.height < kMinAppWindowSide) {
+            continue;
+        }
+
+        pid_t pid = 0;
+        CFNumberRef pidNumber = (CFNumberRef)CFDictionaryGetValue(window, kCGWindowOwnerPID);
+        if (!pidNumber || !CFNumberGetValue(pidNumber, kCFNumberIntType, &pid)) {
+            continue;
+        }
+
+        bool listed = false;
+        for (unsigned int j = 0; j < count; j++) {
+            if (outPids[j] == pid) {
+                listed = true;
+                break;
+            }
+        }
+        if (!listed) {
+            outPids[count++] = pid;
+        }
+    }
+
+    CFRelease(windowList);
+    CFRelease(onSpace);
+    return count;
 }

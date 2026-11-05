@@ -2,6 +2,7 @@
 #define _ISS_H
 
 #include <stdbool.h>
+#include <sys/types.h>
 #include <CoreFoundation/CoreFoundation.h>
 
 /** @brief Initialize resources
@@ -117,5 +118,14 @@ void iss_set_overlay_detection_enabled(bool enabled);
  * @param speed The velocity value for the gesture
  */
 void iss_set_gesture_speed(double speed);
+
+/**
+ * @brief Lists the processes with ordinary windows on a space, frontmost first.
+ * @param spaceIndex Zero-based index of the space on the display under the cursor.
+ * @param outPids Receives each process ID once.
+ * @param maxPids Capacity of outPids.
+ * @return How many process IDs were written; 0 when the space has none or cannot be read.
+ */
+unsigned int iss_get_space_app_pids(unsigned int spaceIndex, pid_t *outPids, unsigned int maxPids);
 
 #endif /* _ISS_H */

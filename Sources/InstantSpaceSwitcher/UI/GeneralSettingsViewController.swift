@@ -11,6 +11,8 @@ final class GeneralSettingsViewController: NSViewController {
     checkboxWithTitle: "Enable Mission Control/Exposé detection (experimental)", target: nil, action: nil)
   private let showOSDInMissionControlCheckbox = NSButton(
     checkboxWithTitle: "Show on-screen display in Mission Control", target: nil, action: nil)
+  private let osdAppIconsCheckbox = NSButton(
+    checkboxWithTitle: "Show the space's app icons instead of its number", target: nil, action: nil)
   private let swipeOverrideCheckbox = NSButton(
     checkboxWithTitle: "Override swipe gesture", target: nil, action: nil)
   private let mouseShortcutsCheckbox = NSButton(
@@ -53,6 +55,8 @@ final class GeneralSettingsViewController: NSViewController {
     overlayDetectionCheckbox.action = #selector(overlayDetectionChanged)
     showOSDInMissionControlCheckbox.target = self
     showOSDInMissionControlCheckbox.action = #selector(showOSDInMissionControlChanged)
+    osdAppIconsCheckbox.target = self
+    osdAppIconsCheckbox.action = #selector(osdAppIconsChanged)
     swipeOverrideCheckbox.target = self
     swipeOverrideCheckbox.action = #selector(swipeOverrideChanged)
     mouseShortcutsCheckbox.target = self
@@ -107,6 +111,7 @@ final class GeneralSettingsViewController: NSViewController {
     
     formView.addRow(label: osdLabel, control: osdContainer)
     formView.addRow(label: nil, control: showOSDInMissionControlCheckbox)
+    formView.addRow(label: nil, control: osdAppIconsCheckbox)
   }
 
   private func loadSettings() {
@@ -125,6 +130,8 @@ final class GeneralSettingsViewController: NSViewController {
     let overlayDetectionEnabled = overlayDetectionCheckbox.state == .on
     showOSDInMissionControlCheckbox.isEnabled = showOSD && overlayDetectionEnabled
     showOSDInMissionControlCheckbox.state = defaults.bool(forKey: "showOSDInMissionControl") ? .on : .off
+    osdAppIconsCheckbox.isEnabled = showOSD
+    osdAppIconsCheckbox.state = (defaults.object(forKey: "osdShowsAppIcons") as? Bool ?? true) ? .on : .off
 
     hideMenuBarIconCheckbox.state = defaults.bool(forKey: "hideMenuBarIcon") ? .on : .off
     swipeOverrideCheckbox.state = defaults.bool(forKey: "swipeOverride") ? .on : .off
@@ -148,6 +155,7 @@ final class GeneralSettingsViewController: NSViewController {
     let isEnabled = sender.state == .on
     defaults.set(isEnabled, forKey: "showOSD")
     osdDurationPopup.isEnabled = isEnabled
+    osdAppIconsCheckbox.isEnabled = isEnabled
     let overlayDetectionEnabled = overlayDetectionCheckbox.state == .on
     showOSDInMissionControlCheckbox.isEnabled = isEnabled && overlayDetectionEnabled
   }
@@ -158,6 +166,10 @@ final class GeneralSettingsViewController: NSViewController {
     let showOSDEnabled = showOSDCheckbox.state == .on
     showOSDInMissionControlCheckbox.isEnabled = showOSDEnabled && isEnabled
     iss_set_overlay_detection_enabled(isEnabled)
+  }
+
+  @objc private func osdAppIconsChanged(_ sender: NSButton) {
+    defaults.set(sender.state == .on, forKey: "osdShowsAppIcons")
   }
 
   @objc private func showOSDInMissionControlChanged(_ sender: NSButton) {
