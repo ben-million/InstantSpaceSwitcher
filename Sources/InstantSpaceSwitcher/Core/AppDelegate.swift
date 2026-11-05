@@ -63,6 +63,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     bindHotkeys()
+
+    MouseShortcutMonitor.shared.handler = { [weak self] direction in
+      self?.performSpaceCycle(direction)
+    }
+    MouseShortcutMonitor.shared.setEnabled(
+      UserDefaults.standard.object(forKey: "mouseShortcuts") as? Bool ?? true)
+
     observeSpaceChanges()
     observeAppActivation()
     refreshSpaceInfo()
@@ -322,6 +329,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       return
     }
     refreshSpaceInfo()
+  }
+
+  /// Like performSpaceSwitch, but wraps around from either end to the other.
+  private func performSpaceCycle(_ direction: ISSDirection) {
+    var info = ISSSpaceInfo()
+    guard iss_get_space_info(&info), info.spaceCount > 1, !iss_can_move(info, direction) else {
+      performSpaceSwitch(direction)
+      return
+    }
+    performSpaceSwitchToIndex(direction == ISSDirectionLeft ? info.spaceCount - 1 : 0)
   }
 
   private func performSpaceSwitchToIndex(_ index: UInt32) {
