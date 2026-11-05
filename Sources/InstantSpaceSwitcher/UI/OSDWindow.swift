@@ -4,8 +4,12 @@ import ISS
 final class OSDWindow {
   static let shared = OSDWindow()
   private var window: NSWindow?
+  private var panel: NSVisualEffectView?
   private var label: NSTextField?
   private var iconStack: NSStackView?
+  private var overview: NSStackView?
+  // Every space's icons, and the display they're on, while the display is up
+  private var overviewCache: (display: String, spaces: [[NSImage]])?
   private var hideTimer: Timer?
   // Fades the screen behind the icons
   private var scrim: NSWindow?
@@ -17,7 +21,16 @@ final class OSDWindow {
   private static let iconSpacing: CGFloat = 12
   private static let iconPadding: CGFloat = 24
   private static let maxIcons = 8
+  private static let cornerRadius: CGFloat = 18
   private static let scrimOpacity: CGFloat = 0.3
+
+  // The overview of every space
+  private static let tileSize: CGFloat = 96
+  private static let ringInset: CGFloat = 10
+  private static let ringWidth: CGFloat = 3
+  private static let ringCornerRadius: CGFloat = 16
+  private static let ringSpacing: CGFloat = 4
+  private static let overviewPadding: CGFloat = 12
 
   private init() {}
 
@@ -51,6 +64,7 @@ final class OSDWindow {
   func hide() {
     hideTimer?.invalidate()
     hideTimer = nil
+    overviewCache = nil
     hideScrim()
     NSAnimationContext.runAnimationGroup({ context in
       context.duration = 0.2
@@ -73,12 +87,32 @@ final class OSDWindow {
     let showsAppIcons = defaults.object(forKey: "osdShowsAppIcons") as? Bool ?? true
     // Behind an empty space's number too, so stepping through spaces doesn't flicker
     let fadesScreen = showsAppIcons && (defaults.object(forKey: "osdFadesScreen") as? Bool ?? true)
+    if showsAppIcons && defaults.bool(forKey: "osdShowsAllSpaces"), let spaces = allSpacesIcons(),
+      Int(spaceIndex) < spaces.count
+    {
+      present(spaces: spaces, selected: Int(spaceIndex), fadesScreen: fadesScreen, hidesAfterDuration: hidesAfterDuration)
+      return
+    }
     let icons = showsAppIcons ? Self.appIcons(onSpace: spaceIndex) : []
     if icons.isEmpty {
       present(message: "\(spaceIndex + 1)", fadesScreen: fadesScreen, hidesAfterDuration: hidesAfterDuration)
     } else {
       present(icons: icons, fadesScreen: fadesScreen, hidesAfterDuration: hidesAfterDuration)
     }
+  }
+
+  /// Every space's app icons on the display under the cursor. They're kept while the
+  /// display is up, as stepping from space to space doesn't change what's on them.
+  private func allSpacesIcons() -> [[NSImage]]? {
+    var info = ISSSpaceInfo()
+    guard iss_get_space_info(&info), info.spaceCount > 0 else { return nil }
+    let display = withUnsafeBytes(of: info.displayID) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+    if let overviewCache, overviewCache.display == display, overviewCache.spaces.count == Int(info.spaceCount) {
+      return overviewCache.spaces
+    }
+    let spaces = (0..<info.spaceCount).map { Self.appIcons(onSpace: $0) }
+    overviewCache = (display, spaces)
+    return spaces
   }
 
   private static func appIcons(onSpace spaceIndex: UInt32) -> [NSImage] {
@@ -104,11 +138,13 @@ final class OSDWindow {
     if window == nil {
       createWindow()
     }
-    guard let window = window, let label = label, let iconStack = iconStack else { return }
+    guard let window = window, let label = label, let iconStack = iconStack, let overview else { return }
 
     label.stringValue = message
     label.isHidden = false
     iconStack.isHidden = true
+    overview.isHidden = true
+    panel?.layer?.cornerRadius = Self.cornerRadius
     present(
       window, size: NSSize(width: Self.numberSize, height: Self.numberSize), fadesScreen: fadesScreen,
       hidesAfterDuration: hidesAfterDuration)
@@ -118,7 +154,7 @@ final class OSDWindow {
     if window == nil {
       createWindow()
     }
-    guard let window = window, let label = label, let iconStack = iconStack else { return }
+    guard let window = window, let label = label, let iconStack = iconStack, let overview else { return }
 
     for view in iconStack.arrangedSubviews {
       iconStack.removeArrangedSubview(view)
@@ -137,11 +173,111 @@ final class OSDWindow {
 
     label.isHidden = true
     iconStack.isHidden = false
+    overview.isHidden = true
+    panel?.layer?.cornerRadius = Self.cornerRadius
     let count = CGFloat(icons.count)
     let width = count * Self.iconSize + (count - 1) * Self.iconSpacing + 2 * Self.iconPadding
     present(
       window, size: NSSize(width: width, height: Self.iconSize + 2 * Self.iconPadding), fadesScreen: fadesScreen,
       hidesAfterDuration: hidesAfterDuration)
+  }
+
+  /// Lays every space out as a tile of its app icons, the way Command-Tab lays out
+  /// apps, and rings the selected one.
+  private func present(spaces: [[NSImage]], selected: Int, fadesScreen: Bool, hidesAfterDuration: Bool) {
+    if window == nil {
+      createWindow()
+    }
+    guard let window, let label, let iconStack, let overview else { return }
+
+    // Smaller tiles when there are too many spaces to fit across the screen
+    let count = CGFloat(spaces.count)
+    let screenWidth = Self.cursorScreen()?.visibleFrame.width ?? 1440
+    let ringSide = min(
+      Self.tileSize + 2 * Self.ringInset,
+      (screenWidth * 0.9 - 2 * Self.overviewPadding - (count - 1) * Self.ringSpacing) / count)
+
+    for view in overview.arrangedSubviews {
+      overview.removeArrangedSubview(view)
+      view.removeFromSuperview()
+    }
+    for (index, icons) in spaces.enumerated() {
+      overview.addArrangedSubview(
+        Self.spaceTile(icons: icons, number: index + 1, size: ringSide - 2 * Self.ringInset, ringed: index == selected))
+    }
+
+    label.isHidden = true
+    iconStack.isHidden = true
+    overview.isHidden = false
+    // Corners that follow the ring's, round it
+    panel?.layer?.cornerRadius = Self.ringCornerRadius + Self.overviewPadding
+    let width = count * ringSide + (count - 1) * Self.ringSpacing + 2 * Self.overviewPadding
+    present(
+      window, size: NSSize(width: width, height: ringSide + 2 * Self.overviewPadding), fadesScreen: fadesScreen,
+      hidesAfterDuration: hidesAfterDuration)
+  }
+
+  /// One space in the overview: its app icons in a grid as square as they allow, or its
+  /// number when it has none, with room around it for the ring.
+  private static func spaceTile(icons: [NSImage], number: Int, size: CGFloat, ringed: Bool) -> NSView {
+    let tile = NSView()
+    tile.wantsLayer = true
+    tile.translatesAutoresizingMaskIntoConstraints = false
+    let side = size + 2 * ringInset
+    NSLayoutConstraint.activate([
+      tile.widthAnchor.constraint(equalToConstant: side),
+      tile.heightAnchor.constraint(equalToConstant: side),
+    ])
+    if ringed, let layer = tile.layer {
+      layer.cornerRadius = ringCornerRadius
+      layer.borderWidth = ringWidth
+      layer.borderColor = NSColor.white.cgColor
+      layer.backgroundColor = NSColor.white.withAlphaComponent(0.1).cgColor
+    }
+
+    let content: NSView
+    if icons.isEmpty {
+      let label = NSTextField(labelWithString: "\(number)")
+      label.font = NSFont.systemFont(ofSize: size * 0.4, weight: .medium)
+      label.textColor = .secondaryLabelColor
+      content = label
+    } else {
+      let columns = Int(ceil(Double(icons.count).squareRoot()))
+      let gap = size * 0.06
+      let iconSide = (size - CGFloat(columns - 1) * gap) / CGFloat(columns)
+      let rows = NSStackView()
+      rows.orientation = .vertical
+      rows.alignment = .centerX
+      rows.spacing = gap
+      for start in stride(from: 0, to: icons.count, by: columns) {
+        let row = NSStackView(
+          views: icons[start..<min(start + columns, icons.count)].map { icon in
+            let imageView = NSImageView(image: icon)
+            imageView.imageScaling = .scaleProportionallyUpOrDown
+            imageView.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+              imageView.widthAnchor.constraint(equalToConstant: iconSide),
+              imageView.heightAnchor.constraint(equalToConstant: iconSide),
+            ])
+            return imageView
+          })
+        row.spacing = gap
+        rows.addArrangedSubview(row)
+      }
+      content = rows
+    }
+    content.translatesAutoresizingMaskIntoConstraints = false
+    tile.addSubview(content)
+    NSLayoutConstraint.activate([
+      content.centerXAnchor.constraint(equalTo: tile.centerXAnchor),
+      content.centerYAnchor.constraint(equalTo: tile.centerYAnchor),
+    ])
+    return tile
+  }
+
+  private static func cursorScreen() -> NSScreen? {
+    let mouseLocation = NSEvent.mouseLocation
+    return NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) }) ?? NSScreen.main
   }
 
   private func present(_ window: NSWindow, size: NSSize, fadesScreen: Bool, hidesAfterDuration: Bool) {
@@ -150,9 +286,7 @@ final class OSDWindow {
 
     // Center on cursor's screen
     var frame = NSRect(origin: window.frame.origin, size: size)
-    let mouseLocation = NSEvent.mouseLocation
-    let screen =
-      NSScreen.screens.first(where: { $0.frame.contains(mouseLocation) }) ?? NSScreen.main
+    let screen = Self.cursorScreen()
     if let screen = screen {
       let screenFrame = screen.visibleFrame
       frame.origin = NSPoint(x: screenFrame.midX - size.width / 2, y: screenFrame.midY - size.height / 2)
@@ -252,7 +386,7 @@ final class OSDWindow {
     visualEffect.material = .hudWindow
     visualEffect.state = .active
     visualEffect.wantsLayer = true
-    visualEffect.layer?.cornerRadius = 18
+    visualEffect.layer?.cornerRadius = Self.cornerRadius
     visualEffect.layer?.masksToBounds = true
 
     let label = NSTextField(labelWithString: "")
@@ -270,8 +404,15 @@ final class OSDWindow {
     iconStack.translatesAutoresizingMaskIntoConstraints = false
     iconStack.isHidden = true
 
+    let overview = NSStackView()
+    overview.orientation = .horizontal
+    overview.spacing = Self.ringSpacing
+    overview.translatesAutoresizingMaskIntoConstraints = false
+    overview.isHidden = true
+
     visualEffect.addSubview(label)
     visualEffect.addSubview(iconStack)
+    visualEffect.addSubview(overview)
     window.contentView = visualEffect
 
     NSLayoutConstraint.activate([
@@ -279,10 +420,14 @@ final class OSDWindow {
       label.centerYAnchor.constraint(equalTo: visualEffect.centerYAnchor),
       iconStack.centerXAnchor.constraint(equalTo: visualEffect.centerXAnchor),
       iconStack.centerYAnchor.constraint(equalTo: visualEffect.centerYAnchor),
+      overview.centerXAnchor.constraint(equalTo: visualEffect.centerXAnchor),
+      overview.centerYAnchor.constraint(equalTo: visualEffect.centerYAnchor),
     ])
 
     self.window = window
+    self.panel = visualEffect
     self.label = label
     self.iconStack = iconStack
+    self.overview = overview
   }
 }
