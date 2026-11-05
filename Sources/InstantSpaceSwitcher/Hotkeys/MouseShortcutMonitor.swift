@@ -5,11 +5,11 @@ import ISS
 /// the right button one space to the right. A shortcut click never reaches the
 /// window under the pointer.
 ///
-/// Command-Control-scroll steps the same way, as the scroll would move a page: back
-/// (up or left) one space left, forward (down or right) one space right. A mouse
-/// wheel steps once a notch. On a trackpad or Magic Mouse the fingers step as soon as
-/// they move, then again every so far they scroll; the momentum after they lift
-/// doesn't step, so the spaces stop where the fingers do.
+/// Command-scroll, with Control or without, steps the same way, as the scroll would
+/// move a page: back (up or left) one space left, forward (down or right) one space
+/// right. A mouse wheel steps once a notch. On a trackpad or Magic Mouse the fingers
+/// step as soon as they move, then again every so far they scroll; the momentum after
+/// they lift doesn't step, so the spaces stop where the fingers do.
 ///
 /// Command-Control-drag still moves windows (AppKit's NSWindowShouldDragOnGesture),
 /// so a left press is held back until it ends as a click, which switches on release,
@@ -220,7 +220,7 @@ final class MouseShortcutMonitor {
 
     // A mouse wheel's scrolls have no phases
     if phase == 0 && momentumPhase == CGMomentumScrollPhase.none.rawValue {
-      guard Self.isShortcut(event.flags) else { return false }
+      guard Self.isScrollShortcut(event.flags) else { return false }
       let forward = Self.forward(
         dx: event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis2),
         dy: event.getDoubleValueField(.scrollWheelEventFixedPtDeltaAxis1))
@@ -230,12 +230,12 @@ final class MouseShortcutMonitor {
 
     switch phase {
     case CGScrollPhase.mayBegin.rawValue:
-      shortcutTouch = Self.isShortcut(event.flags)
+      shortcutTouch = Self.isScrollShortcut(event.flags)
       swipe = shortcutTouch ? .stepping(0, false) : .passing
     case CGScrollPhase.began.rawValue:
       // A touch that came down as a shortcut stays one
       if !shortcutTouch {
-        swipe = Self.isShortcut(event.flags) ? .stepping(0, false) : .passing
+        swipe = Self.isScrollShortcut(event.flags) ? .stepping(0, false) : .passing
       }
       shortcutTouch = false
     case CGScrollPhase.ended.rawValue, CGScrollPhase.cancelled.rawValue:
@@ -286,5 +286,12 @@ final class MouseShortcutMonitor {
   private static func isShortcut(_ flags: CGEventFlags) -> Bool {
     let modifiers: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate, .maskShift]
     return flags.intersection(modifiers) == [.maskCommand, .maskControl]
+  }
+
+  /// Command, with Control or without, but not Option or Shift, so Command-Shift-scroll and
+  /// the like pass through.
+  private static func isScrollShortcut(_ flags: CGEventFlags) -> Bool {
+    let modifiers = flags.intersection([.maskCommand, .maskControl, .maskAlternate, .maskShift])
+    return modifiers == [.maskCommand] || modifiers == [.maskCommand, .maskControl]
   }
 }
