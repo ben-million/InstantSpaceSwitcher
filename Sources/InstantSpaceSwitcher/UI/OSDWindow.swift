@@ -20,19 +20,36 @@ final class OSDWindow {
   /// number when it has none or app icons are turned off.
   func show(spaceIndex: UInt32) {
     guard shouldShow() else { return }
-
-    let showsAppIcons = UserDefaults.standard.object(forKey: "osdShowsAppIcons") as? Bool ?? true
-    let icons = showsAppIcons ? Self.appIcons(onSpace: spaceIndex) : []
-    if icons.isEmpty {
-      present(message: "\(spaceIndex + 1)")
-    } else {
-      present(icons: icons)
-    }
+    present(spaceIndex: spaceIndex, hidesAfterDuration: true)
   }
 
   func show(message: String) {
     guard shouldShow() else { return }
-    present(message: message)
+    present(message: message, hidesAfterDuration: true)
+  }
+
+  /// Shows the space the way show(spaceIndex:) does, whatever the on-screen display
+  /// settings say, and keeps it up until scheduleHide() or hide().
+  func showPreview(spaceIndex: UInt32) {
+    present(spaceIndex: spaceIndex, hidesAfterDuration: false)
+  }
+
+  /// Hides after the usual on-screen display duration.
+  func scheduleHide() {
+    hideTimer?.invalidate()
+    let durationMs = UserDefaults.standard.object(forKey: "osdDurationMs") as? Int ?? 500
+    hideTimer = Timer.scheduledTimer(withTimeInterval: Double(durationMs) / 1000.0, repeats: false) { [weak self] _ in
+      self?.hide()
+    }
+  }
+
+  func hide() {
+    hideTimer?.invalidate()
+    hideTimer = nil
+    NSAnimationContext.runAnimationGroup({ context in
+      context.duration = 0.2
+      window?.animator().alphaValue = 0.0
+    })
   }
 
   private func shouldShow() -> Bool {
@@ -43,6 +60,16 @@ final class OSDWindow {
       return false
     }
     return true
+  }
+
+  private func present(spaceIndex: UInt32, hidesAfterDuration: Bool) {
+    let showsAppIcons = UserDefaults.standard.object(forKey: "osdShowsAppIcons") as? Bool ?? true
+    let icons = showsAppIcons ? Self.appIcons(onSpace: spaceIndex) : []
+    if icons.isEmpty {
+      present(message: "\(spaceIndex + 1)", hidesAfterDuration: hidesAfterDuration)
+    } else {
+      present(icons: icons, hidesAfterDuration: hidesAfterDuration)
+    }
   }
 
   private static func appIcons(onSpace spaceIndex: UInt32) -> [NSImage] {
@@ -64,7 +91,7 @@ final class OSDWindow {
     return icons
   }
 
-  private func present(message: String) {
+  private func present(message: String, hidesAfterDuration: Bool) {
     if window == nil {
       createWindow()
     }
@@ -73,10 +100,10 @@ final class OSDWindow {
     label.stringValue = message
     label.isHidden = false
     iconStack.isHidden = true
-    present(window, size: NSSize(width: Self.numberSize, height: Self.numberSize))
+    present(window, size: NSSize(width: Self.numberSize, height: Self.numberSize), hidesAfterDuration: hidesAfterDuration)
   }
 
-  private func present(icons: [NSImage]) {
+  private func present(icons: [NSImage], hidesAfterDuration: Bool) {
     if window == nil {
       createWindow()
     }
@@ -101,10 +128,12 @@ final class OSDWindow {
     iconStack.isHidden = false
     let count = CGFloat(icons.count)
     let width = count * Self.iconSize + (count - 1) * Self.iconSpacing + 2 * Self.iconPadding
-    present(window, size: NSSize(width: width, height: Self.iconSize + 2 * Self.iconPadding))
+    present(
+      window, size: NSSize(width: width, height: Self.iconSize + 2 * Self.iconPadding),
+      hidesAfterDuration: hidesAfterDuration)
   }
 
-  private func present(_ window: NSWindow, size: NSSize) {
+  private func present(_ window: NSWindow, size: NSSize, hidesAfterDuration: Bool) {
     hideTimer?.invalidate()
     hideTimer = nil
 
@@ -122,10 +151,8 @@ final class OSDWindow {
     window.alphaValue = 1.0
     window.orderFrontRegardless()
 
-    let durationMs = UserDefaults.standard.object(forKey: "osdDurationMs") as? Int ?? 500
-    let duration = Double(durationMs) / 1000.0
-    hideTimer = Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { [weak self] _ in
-      self?.hide()
+    if hidesAfterDuration {
+      scheduleHide()
     }
   }
 
@@ -185,12 +212,5 @@ final class OSDWindow {
     self.window = window
     self.label = label
     self.iconStack = iconStack
-  }
-
-  private func hide() {
-    NSAnimationContext.runAnimationGroup({ context in
-      context.duration = 0.2
-      window?.animator().alphaValue = 0.0
-    })
   }
 }

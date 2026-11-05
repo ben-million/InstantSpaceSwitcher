@@ -17,6 +17,9 @@ final class GeneralSettingsViewController: NSViewController {
     checkboxWithTitle: "Override swipe gesture", target: nil, action: nil)
   private let mouseShortcutsCheckbox = NSButton(
     checkboxWithTitle: "Switch spaces with Command-Control-click", target: nil, action: nil)
+  private let mouseShortcutPreviewCheckbox = NSButton(
+    checkboxWithTitle: "Show the space first, and switch after", target: nil, action: nil)
+  private let mouseShortcutPreviewDelayPopup = NSPopUpButton()
   private let animationSpeedPopup = NSPopUpButton()
   private let animationSpeedLabel = NSTextField(labelWithString: "Animation Speed:")
   private let launchAtLoginCheckbox = NSButton(
@@ -25,6 +28,7 @@ final class GeneralSettingsViewController: NSViewController {
     checkboxWithTitle: "Hide menu bar icon", target: nil, action: nil)
 
   private let durationPresets = [100, 200, 300, 500, 750, 1000]
+  private let previewDelayPresets = [300, 500, 750, 1000, 1500]
   private let animationSpeedOptions = ["Normal", "Fast", "Faster", "Fastest", "Instant"]
   private let animationSpeedValues: [Double] = [40.0, 50.0, 60.0, 80.0, 2000.0]
 
@@ -61,6 +65,10 @@ final class GeneralSettingsViewController: NSViewController {
     swipeOverrideCheckbox.action = #selector(swipeOverrideChanged)
     mouseShortcutsCheckbox.target = self
     mouseShortcutsCheckbox.action = #selector(mouseShortcutsChanged)
+    mouseShortcutPreviewCheckbox.target = self
+    mouseShortcutPreviewCheckbox.action = #selector(mouseShortcutPreviewChanged)
+    mouseShortcutPreviewDelayPopup.target = self
+    mouseShortcutPreviewDelayPopup.action = #selector(mouseShortcutPreviewDelayChanged)
     animationSpeedPopup.target = self
     animationSpeedPopup.action = #selector(animationSpeedChanged)
     launchAtLoginCheckbox.target = self
@@ -70,6 +78,7 @@ final class GeneralSettingsViewController: NSViewController {
 
     // Populate data
     for duration in durationPresets { osdDurationPopup.addItem(withTitle: "\(duration)ms") }
+    for delay in previewDelayPresets { mouseShortcutPreviewDelayPopup.addItem(withTitle: "\(delay)ms") }
     for speed in animationSpeedOptions { animationSpeedPopup.addItem(withTitle: speed) }
 
     // System
@@ -78,6 +87,14 @@ final class GeneralSettingsViewController: NSViewController {
     formView.addRow(label: nil, control: hideMenuBarIconCheckbox)
     formView.addRow(label: nil, control: swipeOverrideCheckbox)
     formView.addRow(label: nil, control: mouseShortcutsCheckbox)
+
+    let previewContainer = NSStackView()
+    previewContainer.orientation = .horizontal
+    previewContainer.spacing = 8
+    previewContainer.addArrangedSubview(mouseShortcutPreviewCheckbox)
+    previewContainer.addArrangedSubview(mouseShortcutPreviewDelayPopup)
+    previewContainer.addArrangedSubview(NSTextField(labelWithString: "without another click"))
+    formView.addRow(label: nil, control: previewContainer)
 
     let experimentalTitle = NSMutableAttributedString(string: "Enable Mission Control/Exposé detection\n")
     let sublabel = NSAttributedString(
@@ -135,7 +152,14 @@ final class GeneralSettingsViewController: NSViewController {
 
     hideMenuBarIconCheckbox.state = defaults.bool(forKey: "hideMenuBarIcon") ? .on : .off
     swipeOverrideCheckbox.state = defaults.bool(forKey: "swipeOverride") ? .on : .off
-    mouseShortcutsCheckbox.state = (defaults.object(forKey: "mouseShortcuts") as? Bool ?? true) ? .on : .off
+    let mouseShortcutsEnabled = defaults.object(forKey: "mouseShortcuts") as? Bool ?? true
+    mouseShortcutsCheckbox.state = mouseShortcutsEnabled ? .on : .off
+    let previewEnabled = defaults.bool(forKey: "mouseShortcutPreview")
+    mouseShortcutPreviewCheckbox.state = previewEnabled ? .on : .off
+    mouseShortcutPreviewCheckbox.isEnabled = mouseShortcutsEnabled
+    let previewDelayMs = defaults.object(forKey: "mouseShortcutPreviewDelayMs") as? Int ?? 750
+    mouseShortcutPreviewDelayPopup.selectItem(at: previewDelayPresets.firstIndex(of: previewDelayMs) ?? 2)
+    mouseShortcutPreviewDelayPopup.isEnabled = mouseShortcutsEnabled && previewEnabled
 
     let animationSpeedValue = defaults.double(forKey: "gestureSpeed")
     if animationSpeedValue > 0 {
@@ -193,6 +217,20 @@ final class GeneralSettingsViewController: NSViewController {
     let isEnabled = sender.state == .on
     defaults.set(isEnabled, forKey: "mouseShortcuts")
     MouseShortcutMonitor.shared.setEnabled(isEnabled)
+    mouseShortcutPreviewCheckbox.isEnabled = isEnabled
+    mouseShortcutPreviewDelayPopup.isEnabled = isEnabled && mouseShortcutPreviewCheckbox.state == .on
+  }
+
+  @objc private func mouseShortcutPreviewChanged(_ sender: NSButton) {
+    let isEnabled = sender.state == .on
+    defaults.set(isEnabled, forKey: "mouseShortcutPreview")
+    mouseShortcutPreviewDelayPopup.isEnabled = isEnabled
+  }
+
+  @objc private func mouseShortcutPreviewDelayChanged(_ sender: NSPopUpButton) {
+    let index = sender.indexOfSelectedItem
+    guard index >= 0 && index < previewDelayPresets.count else { return }
+    defaults.set(previewDelayPresets[index], forKey: "mouseShortcutPreviewDelayMs")
   }
 
   @objc private func animationSpeedChanged(_ sender: NSPopUpButton) {

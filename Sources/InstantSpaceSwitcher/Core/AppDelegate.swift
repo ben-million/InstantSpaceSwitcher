@@ -13,6 +13,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var cancellables = Set<AnyCancellable>()
   private var spaceChangeObserver: Any?
   private var appActivationObserver: Any?
+  // The space a Command-Control-click preview is showing, and the switch waiting on it
+  private var previewIndex: UInt32?
+  private var previewCommit: DispatchWorkItem?
 
   func applicationWillFinishLaunching(_ notification: Notification) {
     NSAppleEventManager.shared().setEventHandler(
@@ -65,7 +68,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     bindHotkeys()
 
     MouseShortcutMonitor.shared.handler = { [weak self] direction in
-      self?.performSpaceCycle(direction)
+      if UserDefaults.standard.bool(forKey: "mouseShortcutPreview") {
+        self?.previewSpaceCycle(direction)
+      } else {
+        self?.performSpaceCycle(direction)
+      }
     }
     MouseShortcutMonitor.shared.setEnabled(
       UserDefaults.standard.object(forKey: "mouseShortcuts") as? Bool ?? true)
@@ -339,6 +346,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       return
     }
     performSpaceSwitchToIndex(direction == ISSDirectionLeft ? info.spaceCount - 1 : 0)
+  }
+
+  /// Like performSpaceCycle, but each click only moves a preview on, and the switch
+  /// to the space it shows happens once no click has come for the preview delay.
+  private func previewSpaceCycle(_ direction: ISSDirection) {
+    var info = ISSSpaceInfo()
+    guard iss_get_space_info(&info), info.spaceCount > 1 else {
+      performSpaceCycle(direction)
+      return
+    }
+
+    let count = info.spaceCount
+    let from = previewIndex ?? info.currentIndex
+    let target = direction == ISSDirectionLeft ? (from + count - 1) % count : (from + 1) % count
+    previewIndex = target
+    OSDWindow.shared.showPreview(spaceIndex: target)
+
+    previewCommit?.cancel()
+    let commit = DispatchWorkItem { [weak self] in
+      self?.commitPreview()
+    }
+    previewCommit = commit
+    let delayMs = UserDefaults.standard.object(forKey: "mouseShortcutPreviewDelayMs") as? Int ?? 750
+    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs), execute: commit)
+  }
+
+  private func commitPreview() {
+    guard let target = previewIndex else { return }
+    previewIndex = nil
+    previewCommit = nil
+
+    var info = ISSSpaceInfo()
+    if iss_get_space_info(&info), info.currentIndex == target {
+      // Cycled round to where it started
+      OSDWindow.shared.hide()
+      return
+    }
+    OSDWindow.shared.scheduleHide()
+    performSpaceSwitchToIndex(target)
   }
 
   private func performSpaceSwitchToIndex(_ index: UInt32) {
